@@ -1,14 +1,16 @@
+import numpy as np
 import os
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
-from zipfile import ZipFile
-
 import pytorch_lightning as pl
 import torch
+from dataclasses import dataclass
+from multiprocessing import Pool
 from PIL import Image
 from torch import FloatTensor, LongTensor
 from torch.utils.data.dataloader import DataLoader
 from torchvision.transforms import transforms
+from tqdm import tqdm
+from typing import List, Optional, Tuple
+from zipfile import ZipFile
 
 from .vocab import CROHMEVocab
 
@@ -16,7 +18,8 @@ vocab = CROHMEVocab()
 
 Data = List[Tuple[str, Image.Image, List[str]]]
 
-MAX_SIZE = 32e4  # change here accroading to your GPU memory
+MAX_SIZE = 32e5  # change here according to your GPU memory
+
 
 # load data
 def data_iterator(
@@ -38,8 +41,9 @@ def data_iterator(
 
     i = 0
     for fname, fea, lab in data:
-        size = fea.size[0] * fea.size[1]
-        fea = transforms.ToTensor()(fea)
+        # size = fea.size[0] * fea.size[1]
+        # fea = transforms.ToTensor()(fea)
+        size = 4096
         if size > biggest_image_size:
             biggest_image_size = size
         batch_image_size = biggest_image_size * (i + 1)
@@ -77,6 +81,62 @@ def data_iterator(
     return list(zip(fname_total, feature_total, label_total))
 
 
+def get_effective_dims(sparse_pixels: np.ndarray) -> Tuple[int, int]:
+    x_min = np.min(sparse_pixels[:, 0])
+    x_max = np.max(sparse_pixels[:, 0])
+    y_min = np.min(sparse_pixels[:, 1])
+    y_max = np.max(sparse_pixels[:, 1])
+
+    w = x_max - x_min
+    h = y_max - y_min
+
+    return h, w
+
+
+def split_subimage_kd(subimage: np.ndarray, depth: int) -> None:           # "inplace"
+    if depth == 0:
+        return
+
+    h, w = get_effective_dims(subimage)
+    l = subimage.shape[0]
+
+    if h > w:                       # tall subimage, split by horizontal plane
+        ind = np.argpartition(subimage[:, 1], l // 2)
+    else:                           # fat subimage, split by vertical plane
+        ind = np.argpartition(subimage[:, 0], l // 2)
+    subimage[:] = subimage[ind]
+
+    split_subimage_kd(subimage[:l//2], depth - 1)
+    split_subimage_kd(subimage[l//2:], depth - 1)
+
+
+def sparsify(image):
+    image = np.asarray(image)
+    image = 255 - image
+    assert len(image.shape) == 2
+
+    pixel_count = np.sum(image == 0)
+    sparse_pixels = np.asarray(np.where(image == 0), dtype=np.float32).T
+
+    max_pixels = 4096
+    if pixel_count > max_pixels:
+        np.random.shuffle(sparse_pixels)
+    else:
+        np.random.shuffle(sparse_pixels)
+        sparse_pixels = np.tile(sparse_pixels,
+                                (max_pixels // len(sparse_pixels) + 1, 1))
+
+    pixel_count = max_pixels
+    sparse_pixels = sparse_pixels[:pixel_count]
+    split_subimage_kd(sparse_pixels, depth=12)
+
+    h, w = image.shape
+    sparse_pixels[:, 0] = sparse_pixels[:, 0] / h
+    sparse_pixels[:, 1] = sparse_pixels[:, 1] / w
+
+    return sparse_pixels
+
+
 def extract_data(archive: ZipFile, dir_name: str) -> Data:
     """Extract all data need for a dataset from zip archive
 
@@ -89,16 +149,32 @@ def extract_data(archive: ZipFile, dir_name: str) -> Data:
     """
     with archive.open(f"{dir_name}/caption.txt", "r") as f:
         captions = f.readlines()
-    data = []
-    for line in captions:
+    print(f"Loading from {dir_name}/caption.txt")
+
+    img_names = []
+    imgs = []
+    formulas = []
+    for line in tqdm(captions):
         tmp = line.decode().strip().split()
         img_name = tmp[0]
         formula = tmp[1:]
         with archive.open(f"{dir_name}/{img_name}.bmp", "r") as f:
             # move image to memory immediately, avoid lazy loading, which will lead to None pointer error in loading
             img = Image.open(f).copy()
-        data.append((img_name, img, formula))
 
+        img_names.append(img_name)
+        imgs.append(img)
+        formulas.append(formula)
+
+    p = Pool(20)
+    sparse_pixels = []
+    for sparse_img in tqdm(p.imap(sparsify, imgs)):
+        sparse_pixels.append(sparse_img)
+
+    p.close()
+    p.join()
+
+    data = list(zip(img_names, sparse_pixels, formulas))
     print(f"Extract data from: {dir_name}, with data size: {len(data)}")
 
     return data
@@ -106,10 +182,9 @@ def extract_data(archive: ZipFile, dir_name: str) -> Data:
 
 @dataclass
 class Batch:
-    img_bases: List[str]  # [b,]
-    imgs: FloatTensor  # [b, 1, H, W]
-    mask: LongTensor  # [b, H, W]
-    indices: List[List[int]]  # [b, l]
+    img_bases: List[str]            # [b,]
+    imgs: torch.Tensor              # [b, t, 2]
+    indices: List[List[int]]        # [b, l]
 
     def __len__(self) -> int:
         return len(self.img_bases)
@@ -118,7 +193,6 @@ class Batch:
         return Batch(
             img_bases=self.img_bases,
             imgs=self.imgs.to(device),
-            mask=self.mask.to(device),
             indices=self.indices,
         )
 
@@ -130,21 +204,12 @@ def collate_fn(batch):
     images_x = batch[1]
     seqs_y = [vocab.words2indices(x) for x in batch[2]]
 
-    heights_x = [s.size(1) for s in images_x]
-    widths_x = [s.size(2) for s in images_x]
+    x = []
+    for image in images_x:
+        x.append(torch.as_tensor(image, dtype=torch.float32))
+    x = torch.stack(x)
 
-    n_samples = len(heights_x)
-    max_height_x = max(heights_x)
-    max_width_x = max(widths_x)
-
-    x = torch.zeros(n_samples, 1, max_height_x, max_width_x)
-    x_mask = torch.ones(n_samples, max_height_x, max_width_x, dtype=torch.bool)
-    for idx, s_x in enumerate(images_x):
-        x[idx, :, : heights_x[idx], : widths_x[idx]] = s_x
-        x_mask[idx, : heights_x[idx], : widths_x[idx]] = 0
-
-    # return fnames, x, x_mask, seqs_y
-    return Batch(fnames, x, x_mask, seqs_y)
+    return Batch(fnames, x, seqs_y)
 
 
 def build_dataset(archive, folder: str, batch_size: int):

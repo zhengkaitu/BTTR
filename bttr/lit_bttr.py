@@ -1,13 +1,10 @@
-import zipfile
-
 import pytorch_lightning as pl
-import torch
 import torch.optim as optim
-from torch import FloatTensor, LongTensor
-
+import zipfile
 from bttr.datamodule import Batch, vocab
 from bttr.model.bttr import BTTR
 from bttr.utils import ExpRateRecorder, Hypothesis, ce_loss, to_bi_tgt_out
+from torch import FloatTensor, LongTensor
 
 
 class LitBTTR(pl.LightningModule):
@@ -46,16 +43,14 @@ class LitBTTR(pl.LightningModule):
         self.exprate_recorder = ExpRateRecorder()
 
     def forward(
-        self, img: FloatTensor, img_mask: LongTensor, tgt: LongTensor
+        self, img: FloatTensor, tgt: LongTensor
     ) -> FloatTensor:
         """run img and bi-tgt
 
         Parameters
         ----------
         img : FloatTensor
-            [b, 1, h, w]
-        img_mask: LongTensor
-            [b, h, w]
+            [b, t, 2]
         tgt : LongTensor
             [2b, l]
 
@@ -64,7 +59,7 @@ class LitBTTR(pl.LightningModule):
         FloatTensor
             [2b, l, vocab_size]
         """
-        return self.bttr(img, img_mask, tgt)
+        return self.bttr(img, tgt)
 
     def beam_search(
         self,
@@ -78,7 +73,7 @@ class LitBTTR(pl.LightningModule):
         Parameters
         ----------
         img : FloatTensor
-            [1, h, w]
+            [1, t, 2]
         beam_size : int, optional
             by default 10
         max_len : int, optional
@@ -92,14 +87,13 @@ class LitBTTR(pl.LightningModule):
             LaTex string
         """
         assert img.dim() == 3
-        img_mask = torch.zeros_like(img, dtype=torch.long)  # squeeze channel
-        hyps = self.bttr.beam_search(img.unsqueeze(0), img_mask, beam_size, max_len)
+        hyps = self.bttr.beam_search(img.unsqueeze(0), beam_size, max_len)
         best_hyp = max(hyps, key=lambda h: h.score / (len(h) ** alpha))
         return vocab.indices2label(best_hyp.seq)
 
     def training_step(self, batch: Batch, _):
         tgt, out = to_bi_tgt_out(batch.indices, self.device)
-        out_hat = self(batch.imgs, batch.mask, tgt)
+        out_hat = self(batch.imgs, tgt)
 
         loss = ce_loss(out_hat, out)
         self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
@@ -108,7 +102,7 @@ class LitBTTR(pl.LightningModule):
 
     def validation_step(self, batch: Batch, _):
         tgt, out = to_bi_tgt_out(batch.indices, self.device)
-        out_hat = self(batch.imgs, batch.mask, tgt)
+        out_hat = self(batch.imgs, tgt)
 
         loss = ce_loss(out_hat, out)
         self.log(
@@ -121,7 +115,7 @@ class LitBTTR(pl.LightningModule):
         )
 
         hyps = self.bttr.beam_search(
-            batch.imgs, batch.mask, self.hparams.beam_size, self.hparams.max_len
+            batch.imgs, self.hparams.beam_size, self.hparams.max_len
         )
         best_hyp = max(hyps, key=lambda h: h.score / (len(h) ** self.hparams.alpha))
 
@@ -136,7 +130,7 @@ class LitBTTR(pl.LightningModule):
 
     def test_step(self, batch: Batch, _):
         hyps = self.bttr.beam_search(
-            batch.imgs, batch.mask, self.hparams.beam_size, self.hparams.max_len
+            batch.imgs, self.hparams.beam_size, self.hparams.max_len
         )
         best_hyp = max(hyps, key=lambda h: h.score / (len(h) ** self.hparams.alpha))
         self.exprate_recorder(best_hyp.seq, batch.indices[0])

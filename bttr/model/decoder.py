@@ -80,7 +80,7 @@ class Decoder(pl.LightningModule):
         return mask
 
     def forward(
-        self, src: FloatTensor, src_mask: LongTensor, tgt: LongTensor
+        self, src: FloatTensor, tgt: LongTensor
     ) -> FloatTensor:
         """generate output for tgt
 
@@ -88,8 +88,6 @@ class Decoder(pl.LightningModule):
         ----------
         src : FloatTensor
             [b, t, d]
-        src_mask: LongTensor
-            [b, t]
         tgt : LongTensor
             [b, l]
 
@@ -112,8 +110,7 @@ class Decoder(pl.LightningModule):
             tgt=tgt,
             memory=src,
             tgt_mask=tgt_mask,
-            tgt_key_padding_mask=tgt_pad_mask,
-            memory_key_padding_mask=src_mask,
+            tgt_key_padding_mask=tgt_pad_mask
         )
 
         out = rearrange(out, "l b d -> b l d")
@@ -124,7 +121,6 @@ class Decoder(pl.LightningModule):
     def _beam_search(
         self,
         src: FloatTensor,
-        mask: LongTensor,
         direction: str,
         beam_size: int,
         max_len: int,
@@ -135,8 +131,6 @@ class Decoder(pl.LightningModule):
         ----------
         src : FloatTensor
             [1, l, d]
-        mask: LongTensor
-            [1, l]
         direction : str
             one of "l2r" and "r2l"
         beam_size : int
@@ -148,7 +142,7 @@ class Decoder(pl.LightningModule):
         """
         assert direction in {"l2r", "r2l"}
         assert (
-            src.size(0) == 1 and mask.size(0) == 1
+            src.size(0) == 1
         ), f"beam search should only have single source, encounter with batch_size: {src.size(0)}"
 
         if direction == "l2r":
@@ -175,9 +169,8 @@ class Decoder(pl.LightningModule):
             assert hyp_num <= beam_size, f"hyp_num: {hyp_num}, beam_size: {beam_size}"
 
             exp_src = repeat(src.squeeze(0), "s e -> b s e", b=hyp_num)
-            exp_mask = repeat(mask.squeeze(0), "s -> b s", b=hyp_num)
 
-            decode_outputs = self(exp_src, exp_mask, hypotheses)[:, t, :]
+            decode_outputs = self(exp_src, hypotheses)[:, t, :]
             log_p_t = F.log_softmax(decode_outputs, dim=-1)
 
             live_hyp_num = beam_size - len(completed_hypotheses)
@@ -236,7 +229,6 @@ class Decoder(pl.LightningModule):
     def _cross_rate_score(
         self,
         src: FloatTensor,
-        mask: LongTensor,
         hypotheses: List[Hypothesis],
         direction: str,
     ) -> None:
@@ -246,8 +238,6 @@ class Decoder(pl.LightningModule):
         ----------
         src : FloatTensor
             [1, l, d]
-        mask : LongTensor
-            [1, l]
         hypotheses : List[Hypothesis]
         direction : str
         """
@@ -257,9 +247,8 @@ class Decoder(pl.LightningModule):
 
         b = tgt.size(0)
         exp_src = repeat(src.squeeze(0), "s e -> b s e", b=b)
-        exp_mask = repeat(mask.squeeze(0), "s -> b s", b=b)
 
-        output_hat = self(exp_src, exp_mask, tgt)
+        output_hat = self(exp_src, tgt)
 
         flat_hat = rearrange(output_hat, "b l e -> (b l) e")
         flat = rearrange(output, "b l -> (b l)")
@@ -275,7 +264,7 @@ class Decoder(pl.LightningModule):
             hypotheses[i].score += score
 
     def beam_search(
-        self, src: FloatTensor, mask: LongTensor, beam_size: int, max_len: int
+        self, src: FloatTensor, beam_size: int, max_len: int
     ) -> List[Hypothesis]:
         """run beam search for src img
 
@@ -283,8 +272,6 @@ class Decoder(pl.LightningModule):
         ----------
         src : FloatTensor
             [1, l, d]
-        mask: LongTensor
-            [1, l]
         beam_size : int
         max_len : int
 
@@ -292,9 +279,9 @@ class Decoder(pl.LightningModule):
         -------
         List[Hypothesis]
         """
-        l2r_hypos = self._beam_search(src, mask, "l2r", beam_size, max_len)
-        self._cross_rate_score(src, mask, l2r_hypos, direction="r2l")
+        l2r_hypos = self._beam_search(src, "l2r", beam_size, max_len)
+        self._cross_rate_score(src, l2r_hypos, direction="r2l")
 
-        r2l_hypos = self._beam_search(src, mask, "r2l", beam_size, max_len)
-        self._cross_rate_score(src, mask, r2l_hypos, direction="l2r")
+        r2l_hypos = self._beam_search(src, "r2l", beam_size, max_len)
+        self._cross_rate_score(src, r2l_hypos, direction="l2r")
         return l2r_hypos + r2l_hypos

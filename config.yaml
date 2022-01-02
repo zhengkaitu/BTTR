@@ -14,7 +14,7 @@ trainer:
   # gpus: 1
   gpus: 4
   accelerator: ddp
-  check_val_every_n_epoch: 2
+  check_val_every_n_epoch: 20
   max_epochs: 300
 model:
   d_model: 256
@@ -33,4 +33,4 @@ data:
   zipfile_path: data.zip
   test_year: 2014
   batch_size: 8
-  num_workers: 5
+  num_workers: 20

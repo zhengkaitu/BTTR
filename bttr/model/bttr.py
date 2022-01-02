@@ -23,9 +23,7 @@ class BTTR(pl.LightningModule):
     ):
         super().__init__()
 
-        self.encoder = Encoder(
-            d_model=d_model, growth_rate=growth_rate, num_layers=num_layers
-        )
+        self.encoder = Encoder()
         self.decoder = Decoder(
             d_model=d_model,
             nhead=nhead,
@@ -33,18 +31,17 @@ class BTTR(pl.LightningModule):
             dim_feedforward=dim_feedforward,
             dropout=dropout,
         )
+        print(self)
 
     def forward(
-        self, img: FloatTensor, img_mask: LongTensor, tgt: LongTensor
+        self, img: FloatTensor, tgt: LongTensor
     ) -> FloatTensor:
         """run img and bi-tgt
 
         Parameters
         ----------
         img : FloatTensor
-            [b, 1, h, w]
-        img_mask: LongTensor
-            [b, h, w]
+            [b, t, 2]
         tgt : LongTensor
             [2b, l]
 
@@ -53,25 +50,22 @@ class BTTR(pl.LightningModule):
         FloatTensor
             [2b, l, vocab_size]
         """
-        feature, mask = self.encoder(img, img_mask)  # [b, t, d]
+        feature, mask = self.encoder(img)               # [b, t, d]
         feature = torch.cat((feature, feature), dim=0)  # [2b, t, d]
-        mask = torch.cat((mask, mask), dim=0)
 
-        out = self.decoder(feature, mask, tgt)
+        out = self.decoder(feature, tgt)
 
         return out
 
     def beam_search(
-        self, img: FloatTensor, img_mask: LongTensor, beam_size: int, max_len: int
+        self, img: FloatTensor, beam_size: int, max_len: int
     ) -> List[Hypothesis]:
         """run bi-direction beam search for given img
 
         Parameters
         ----------
         img : FloatTensor
-            [1, 1, h', w']
-        img_mask: LongTensor
-            [1, h', w']
+            [1, 1, t, 2]
         beam_size : int
         max_len : int
 
@@ -79,5 +73,5 @@ class BTTR(pl.LightningModule):
         -------
         List[Hypothesis]
         """
-        feature, mask = self.encoder(img, img_mask)  # [1, t, d]
-        return self.decoder.beam_search(feature, mask, beam_size, max_len)
+        feature, mask = self.encoder(img)           # [1, t, d]
+        return self.decoder.beam_search(feature, beam_size, max_len)
