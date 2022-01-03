@@ -50,7 +50,7 @@ class BTTR(pl.LightningModule):
         FloatTensor
             [2b, l, vocab_size]
         """
-        feature, mask = self.encoder(img)               # [b, t, d]
+        feature = self.encoder(img)                     # [b, t, d]
         feature = torch.cat((feature, feature), dim=0)  # [2b, t, d]
 
         out = self.decoder(feature, tgt)
@@ -73,5 +73,5 @@ class BTTR(pl.LightningModule):
         -------
         List[Hypothesis]
         """
-        feature, mask = self.encoder(img)           # [1, t, d]
+        feature = self.encoder(img)                     # [1, t, d]
         return self.decoder.beam_search(feature, beam_size, max_len)
