@@ -5,6 +5,7 @@ from bttr.datamodule import Batch, vocab
 from bttr.model.bttr import BTTR
 from bttr.utils import ExpRateRecorder, Hypothesis, ce_loss, to_bi_tgt_out
 from torch import FloatTensor, LongTensor
+from transformers import get_cosine_schedule_with_warmup
 
 
 class LitBTTR(pl.LightningModule):
@@ -149,17 +150,17 @@ class LitBTTR(pl.LightningModule):
                     f.write(content)
 
     def configure_optimizers(self):
+        """
         optimizer = optim.Adadelta(
             self.parameters(),
             lr=self.hparams.learning_rate,
             eps=1e-6,
             weight_decay=1e-4,
         )
-
         reduce_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode="max",
-            factor=0.1,
+            factor=0.5,
             patience=self.hparams.patience // self.trainer.check_val_every_n_epoch,
         )
         scheduler = {
@@ -168,6 +169,27 @@ class LitBTTR(pl.LightningModule):
             "interval": "epoch",
             "frequency": self.trainer.check_val_every_n_epoch,
             "strict": True,
+        }
+        """
+
+        optimizer = optim.AdamW(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=1e-4,
+            amsgrad=False
+        )
+
+        cosine_scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=350,
+            num_training_steps=10500
+        )
+
+        scheduler = {
+            "scheduler": cosine_scheduler,
+            "monitor": "val_ExpRate",
+            "interval": "step",
+            "frequency": 1
         }
 
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
