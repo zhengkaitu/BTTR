@@ -179,17 +179,31 @@ class LitBTTR(pl.LightningModule):
             amsgrad=False
         )
 
-        cosine_scheduler = get_cosine_schedule_with_warmup(
+        reduce_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            num_warmup_steps=350,
-            num_training_steps=10500
+            mode="max",
+            factor=0.5,
+            patience=self.hparams.patience // self.trainer.check_val_every_n_epoch,
         )
-
         scheduler = {
-            "scheduler": cosine_scheduler,
+            "scheduler": reduce_scheduler,
             "monitor": "val_ExpRate",
-            "interval": "step",
-            "frequency": 1
+            "interval": "epoch",
+            "frequency": self.trainer.check_val_every_n_epoch,
+            "strict": True,
         }
+
+        # cosine_scheduler = get_cosine_schedule_with_warmup(
+        #     optimizer,
+        #     num_warmup_steps=350,
+        #     num_training_steps=10500
+        # )
+        #
+        # scheduler = {
+        #     "scheduler": cosine_scheduler,
+        #     "monitor": "val_ExpRate",
+        #     "interval": "step",
+        #     "frequency": 1
+        # }
 
         return {"optimizer": optimizer, "lr_scheduler": scheduler}

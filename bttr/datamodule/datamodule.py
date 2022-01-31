@@ -12,6 +12,7 @@ from tqdm import tqdm
 from typing import List, Optional, Tuple
 from zipfile import ZipFile
 
+from .pixel_utils import sparsify_with_cluster_split
 from .vocab import CROHMEVocab
 
 vocab = CROHMEVocab()
@@ -81,60 +82,31 @@ def data_iterator(
     return list(zip(fname_total, feature_total, label_total))
 
 
-def get_effective_dims(sparse_pixels: np.ndarray) -> Tuple[int, int]:
-    x_min = np.min(sparse_pixels[:, 0])
-    x_max = np.max(sparse_pixels[:, 0])
-    y_min = np.min(sparse_pixels[:, 1])
-    y_max = np.max(sparse_pixels[:, 1])
-
-    w = x_max - x_min
-    h = y_max - y_min
-
-    return h, w
-
-
-def split_subimage_kd(subimage: np.ndarray, depth: int) -> None:           # "inplace"
-    if depth == 0:
-        return
-
-    h, w = get_effective_dims(subimage)
-    l = subimage.shape[0]
-
-    if h > w:                       # tall subimage, split by horizontal plane
-        ind = np.argpartition(subimage[:, 1], l // 2)
-    else:                           # fat subimage, split by vertical plane
-        ind = np.argpartition(subimage[:, 0], l // 2)
-    subimage[:] = subimage[ind]
-
-    split_subimage_kd(subimage[:l//2], depth - 1)
-    split_subimage_kd(subimage[l//2:], depth - 1)
-
-
-def sparsify(image):
-    image = np.asarray(image)
-    image = 255 - image
-    assert len(image.shape) == 2
-
-    pixel_count = np.sum(image == 0)
-    sparse_pixels = np.asarray(np.where(image == 0), dtype=np.float32).T
-
-    max_pixels = 4096
-    if pixel_count > max_pixels:
-        np.random.shuffle(sparse_pixels)
-    else:
-        np.random.shuffle(sparse_pixels)
-        sparse_pixels = np.tile(sparse_pixels,
-                                (max_pixels // len(sparse_pixels) + 1, 1))
-
-    pixel_count = max_pixels
-    sparse_pixels = sparse_pixels[:pixel_count]
-    split_subimage_kd(sparse_pixels, depth=12)
-
-    h, w = image.shape
-    sparse_pixels[:, 0] = sparse_pixels[:, 0] / h
-    sparse_pixels[:, 1] = sparse_pixels[:, 1] / w
-
-    return sparse_pixels
+# def sparsify(image):
+#     image = np.asarray(image)
+#     image = 255 - image
+#     assert len(image.shape) == 2
+#
+#     pixel_count = np.sum(image == 0)
+#     sparse_pixels = np.asarray(np.where(image == 0), dtype=np.float32).T
+#
+#     max_pixels = 4096
+#     if pixel_count > max_pixels:
+#         np.random.shuffle(sparse_pixels)
+#     else:
+#         np.random.shuffle(sparse_pixels)
+#         sparse_pixels = np.tile(sparse_pixels,
+#                                 (max_pixels // len(sparse_pixels) + 1, 1))
+#
+#     pixel_count = max_pixels
+#     sparse_pixels = sparse_pixels[:pixel_count]
+#     split_subimage_kd(sparse_pixels, depth=12)
+#
+#     h, w = image.shape
+#     sparse_pixels[:, 0] = sparse_pixels[:, 0] / h
+#     sparse_pixels[:, 1] = sparse_pixels[:, 1] / w
+#
+#     return sparse_pixels
 
 
 def extract_data(archive: ZipFile, dir_name: str) -> Data:
@@ -168,7 +140,7 @@ def extract_data(archive: ZipFile, dir_name: str) -> Data:
 
     p = Pool(20)
     sparse_pixels = []
-    for sparse_img in tqdm(p.imap(sparsify, imgs)):
+    for sparse_img in tqdm(p.imap(sparsify_with_cluster_split, imgs)):
         sparse_pixels.append(sparse_img)
 
     p.close()

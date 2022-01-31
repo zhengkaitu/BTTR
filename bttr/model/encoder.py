@@ -19,9 +19,9 @@ def get_args():
     parser.add_argument('--max_pixels', type=int, default=4096)
     parser.add_argument('--cross_level', type=int, default=2)
     parser.add_argument('--pool', type=str, default="cat")
-    parser.add_argument('--cross_attn_pe', type=str, default="none")
-    parser.add_argument("--hidden_dropout", help="Hidden dropout", type=float, default=0.3)
-    parser.add_argument("--attn_dropout", help="Attention dropout", type=float, default=0.3)
+    parser.add_argument('--cross_attn_pe', type=str, default="rel_emb")
+    parser.add_argument("--hidden_dropout", help="Hidden dropout", type=float, default=0.1)
+    parser.add_argument("--attn_dropout", help="Attention dropout", type=float, default=0.1)
     parser.add_argument("--max_relative_positions", help="Max relative positions", type=int, default=0)
     args, _ = parser.parse_known_args()
 
