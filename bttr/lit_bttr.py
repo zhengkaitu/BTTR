@@ -17,6 +17,7 @@ class LitBTTR(pl.LightningModule):
         # encoder
         growth_rate: int,
         num_layers: int,
+        num_attn_layers: int,
         # decoder
         nhead: int,
         num_decoder_layers: int,
@@ -37,6 +38,7 @@ class LitBTTR(pl.LightningModule):
             d_model=d_model,
             growth_rate=growth_rate,
             num_layers=num_layers,
+            num_attn_layers=num_attn_layers,
             nhead=nhead,
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,

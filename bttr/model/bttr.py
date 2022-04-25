@@ -16,6 +16,7 @@ class BTTR(pl.LightningModule):
         d_model: int,
         growth_rate: int,
         num_layers: int,
+        num_attn_layers: int,
         nhead: int,
         num_decoder_layers: int,
         dim_feedforward: int,
@@ -24,7 +25,7 @@ class BTTR(pl.LightningModule):
         super().__init__()
 
         self.encoder = Encoder(
-            d_model=d_model, growth_rate=growth_rate, num_layers=num_layers
+            d_model=d_model, growth_rate=growth_rate, num_layers=num_layers, num_attn_layers=num_attn_layers
         )
         self.decoder = Decoder(
             d_model=d_model,

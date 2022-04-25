@@ -9,6 +9,7 @@ from einops.einops import rearrange
 from torch import FloatTensor, LongTensor
 
 from .pos_enc import ImageRotaryEmbed, ImgPosEnc
+from onmt.encoders.transformer import TransformerEncoderLayer
 
 
 # DenseNet-B
@@ -103,12 +104,13 @@ class DenseNet(nn.Module):
         n_out_channels = int(math.floor(n_channels * reduction))
         self.trans2 = _Transition(n_channels, n_out_channels, use_dropout)
 
-        n_channels = n_out_channels
-        self.dense3 = self._make_dense(
-            n_channels, growth_rate, n_dense_blocks, bottleneck, use_dropout
-        )
+        # n_channels = n_out_channels
+        # self.dense3 = self._make_dense(
+        #     n_channels, growth_rate, n_dense_blocks, bottleneck, use_dropout
+        # )
 
-        self.out_channels = n_channels + n_dense_blocks * growth_rate
+        # self.out_channels = n_channels + n_dense_blocks * growth_rate
+        self.out_channels = n_out_channels
         self.post_norm = nn.BatchNorm2d(self.out_channels)
 
     @staticmethod
@@ -135,13 +137,13 @@ class DenseNet(nn.Module):
         out = self.dense2(out)
         out = self.trans2(out)
         out_mask = out_mask[:, 0::2, 0::2]
-        out = self.dense3(out)
+        # out = self.dense3(out)
         out = self.post_norm(out)
         return out, out_mask
 
 
 class Encoder(pl.LightningModule):
-    def __init__(self, d_model: int, growth_rate: int, num_layers: int):
+    def __init__(self, d_model: int, growth_rate: int, num_layers: int, num_attn_layers: int):
         super().__init__()
 
         self.model = DenseNet(growth_rate=growth_rate, num_layers=num_layers)
@@ -153,6 +155,12 @@ class Encoder(pl.LightningModule):
         self.norm = nn.LayerNorm(d_model)
 
         self.pos_enc_2d = ImgPosEnc(d_model, normalize=True)
+
+        self.transformer = nn.ModuleList(
+            [TransformerEncoderLayer(
+                d_model, heads=8, d_ff=d_model*4, dropout=0.3, attention_dropout=0.3,
+                max_relative_positions=0)
+             for i in range(num_attn_layers)])
 
     def forward(
         self, img: FloatTensor, img_mask: LongTensor
@@ -185,4 +193,9 @@ class Encoder(pl.LightningModule):
         # flat to 1-D
         feature = rearrange(feature, "b h w d -> b (h w) d")
         mask = rearrange(mask, "b h w -> b (h w)")
+
+        for layer in self.transformer:
+            feature = layer(feature, ~mask.unsqueeze(1))
+        # TODO: no post norm yet
+
         return feature, mask
