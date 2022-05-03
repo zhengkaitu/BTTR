@@ -16,10 +16,12 @@ trainer:
   accelerator: ddp
   check_val_every_n_epoch: 2
   max_epochs: 300
+  accumulate_grad_batches: 4
 model:
   d_model: 256
   growth_rate: 24
-  num_layers: 16
+  num_layers: 4
+  num_attn_layers: 0
   nhead: 8
   num_decoder_layers: 3
   dim_feedforward: 1024
@@ -32,5 +34,5 @@ model:
 data:
   zipfile_path: data.zip
   test_year: 2014
-  batch_size: 8
+  batch_size: 2
   num_workers: 5
