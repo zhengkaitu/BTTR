@@ -198,7 +198,7 @@ class Encoder(pl.LightningModule):
         mask = rearrange(mask, "b h w -> b (h w)")
 
         for layer in self.transformer:
-            feature = layer(feature, ~mask.unsqueeze(1))
+            feature = layer(feature, mask.unsqueeze(1))
         # TODO: no post norm yet
 
         return feature, mask
