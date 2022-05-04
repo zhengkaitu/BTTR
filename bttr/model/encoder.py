@@ -92,10 +92,10 @@ class DenseNet(nn.Module):
         #     1, n_channels, kernel_size=3, padding=1, stride=2, bias=False
         # )
         self.norm1 = nn.BatchNorm2d(n_channels)
-        self.dense1 = self._make_dense(
-            n_channels, growth_rate, n_dense_blocks, bottleneck, use_dropout
-        )
-        n_channels += n_dense_blocks * growth_rate
+        # self.dense1 = self._make_dense(
+        #     n_channels, growth_rate, n_dense_blocks, bottleneck, use_dropout
+        # )
+        # n_channels += n_dense_blocks * growth_rate
         n_out_channels = int(math.floor(n_channels * reduction))
         self.trans1 = _Transition(n_channels, n_out_channels, use_dropout)
 
@@ -134,7 +134,7 @@ class DenseNet(nn.Module):
         out = F.relu(out, inplace=True)
         out = F.max_pool2d(out, 2, ceil_mode=True)
         out_mask = out_mask[:, 0::2, 0::2]
-        out = self.dense1(out)
+        # out = self.dense1(out)
         out = self.trans1(out)
         out_mask = out_mask[:, 0::2, 0::2]
         # out = self.dense2(out)
@@ -161,7 +161,7 @@ class Encoder(pl.LightningModule):
 
         self.transformer = nn.ModuleList(
             [TransformerEncoderLayer(
-                d_model, heads=8, d_ff=d_model*4, dropout=0.2, attention_dropout=0.2,
+                d_model, heads=4, d_ff=d_model*2, dropout=0.2, attention_dropout=0.2,
                 max_relative_positions=0)
              for i in range(num_attn_layers)])
 
