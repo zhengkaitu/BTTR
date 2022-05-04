@@ -42,7 +42,7 @@ class BTTR(pl.LightningModule):
         )
 
     def forward(
-        self, imgs: FloatTensor, img_shapes: LongTensor, pixel_counts: LongTensor, tgt: LongTensor
+        self, imgs: torch.Tensor, img_shapes: torch.Tensor, pixel_counts: torch.Tensor, tgt: LongTensor
     ) -> FloatTensor:
         """run img and bi-tgt
 
@@ -65,7 +65,7 @@ class BTTR(pl.LightningModule):
         return out
 
     def beam_search(
-        self, imgs: FloatTensor, img_shapes: LongTensor, pixel_counts: LongTensor, beam_size: int, max_len: int
+        self, imgs: torch.Tensor, img_shapes: torch.Tensor, pixel_counts: torch.Tensor, beam_size: int, max_len: int
     ) -> List[Hypothesis]:
         """run bi-direction beam search for given img
 
