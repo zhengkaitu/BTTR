@@ -1,188 +1,193 @@
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
-from zipfile import ZipFile
+from typing import List, Optional
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
-from PIL import Image
-from torch import FloatTensor, LongTensor
 from torch.utils.data.dataloader import DataLoader
-from torchvision.transforms import transforms
 
 from .vocab import CROHMEVocab
 
 vocab = CROHMEVocab()
+MAX_SIZE = 32e4  # change here according to your GPU memory
 
-Data = List[Tuple[str, Image.Image, List[str]]]
 
-MAX_SIZE = 32e4  # change here accroading to your GPU memory
+@dataclass
+class PixelBatch:
+    img_bases: List[str]            # [b,]
+    imgs: torch.Tensor              # [b, L]
+    img_shapes: torch.Tensor        # [b, 2]
+    pixel_counts: torch.Tensor      # [b]
+    indices: List[List[int]]        # [b, l]
 
-# load data
-def data_iterator(
-    data: Data,
+    def __len__(self) -> int:
+        return len(self.img_bases)
+
+    def to(self, device) -> "PixelBatch":
+        return PixelBatch(
+            img_bases=self.img_bases,
+            imgs=self.imgs.to(device),
+            img_shapes=self.img_shapes.to(device),
+            pixel_counts=self.pixel_counts.to(device),
+            indices=self.indices,
+        )
+
+
+def sparse_data_iterator(
+    data: List,
     batch_size: int,
     batch_Imagesize: int = MAX_SIZE,
     maxlen: int = 200,
-    maxImagesize: int = MAX_SIZE,
-):
-    fname_batch = []
-    feature_batch = []
-    label_batch = []
-    feature_total = []
-    label_total = []
-    fname_total = []
+    maxImagesize: int = MAX_SIZE
+) -> List[PixelBatch]:
+    batches = []
     biggest_image_size = 0
+    fnames = []
+    imgs = []
+    img_shapes = []
+    pixel_counts = []
+    labels = []
 
-    data.sort(key=lambda x: x[1].size[0] * x[1].size[1])
+    data.sort(key=lambda x: x[2][0] * x[2][1])
 
     i = 0
-    for fname, fea, lab in data:
-        size = fea.size[0] * fea.size[1]
-        fea = transforms.ToTensor()(fea)
+    for fname, img, img_shape, pixel_count, lab in data:
+        size = img_shape[0] * img_shape[1]
         if size > biggest_image_size:
             biggest_image_size = size
         batch_image_size = biggest_image_size * (i + 1)
         if len(lab) > maxlen:
             print("sentence", i, "length bigger than", maxlen, "ignore")
         elif size > maxImagesize:
-            print(
-                f"image: {fname} size: {fea.shape[1]} x {fea.shape[2]} =  bigger than {maxImagesize}, ignore"
-            )
+            print(f"image: {fname} size: {img_shape[0]} x {img_shape[1]} =  bigger than {maxImagesize}, ignore")
         else:
-            if batch_image_size > batch_Imagesize or i == batch_size:  # a batch is full
-                fname_total.append(fname_batch)
-                feature_total.append(feature_batch)
-                label_total.append(label_batch)
-                i = 0
+            if batch_image_size > batch_Imagesize or i == batch_size:       # a batch is full
+                max_pixels = np.max(pixel_counts)
+                imgs = [np.pad(img, ((0, max_pixels - len(img)), (0, 0))) for img in imgs]
+                imgs = np.stack(imgs, axis=0)
+                imgs = torch.as_tensor(imgs, dtype=torch.float)
+
+                img_shapes = np.stack(img_shapes, axis=0)
+                img_shapes = torch.as_tensor(img_shapes, dtype=torch.long)
+                pixel_counts = torch.as_tensor(pixel_counts, dtype=torch.long)
+                batch = PixelBatch(
+                    img_bases=fnames,
+                    imgs=imgs,
+                    img_shapes=img_shapes,
+                    pixel_counts=pixel_counts,
+                    indices=labels
+                )
+                batches.append(batch)
+
+                i = 1
                 biggest_image_size = size
-                fname_batch = []
-                feature_batch = []
-                label_batch = []
-                fname_batch.append(fname)
-                feature_batch.append(fea)
-                label_batch.append(lab)
-                i += 1
+                fnames = [fname]
+                imgs = [img]
+                img_shapes = [img_shape]
+                pixel_counts = [pixel_count]
+                labels = [vocab.words2indices(lab)]
+
             else:
-                fname_batch.append(fname)
-                feature_batch.append(fea)
-                label_batch.append(lab)
+                fnames.append(fname)
+                imgs.append(img)
+                img_shapes.append(img_shape)
+                pixel_counts.append(pixel_count)
+                labels.append(vocab.words2indices(lab))
                 i += 1
+    # lastly
+    max_pixels = np.max(pixel_counts)
+    imgs = [np.pad(img, ((0, max_pixels - len(img)), (0, 0))) for img in imgs]
+    imgs = np.stack(imgs, axis=0)
+    imgs = torch.as_tensor(imgs, dtype=torch.float)
 
-    # last batch
-    fname_total.append(fname_batch)
-    feature_total.append(feature_batch)
-    label_total.append(label_batch)
-    print("total ", len(feature_total), "batch data loaded")
-    return list(zip(fname_total, feature_total, label_total))
+    img_shapes = np.stack(img_shapes, axis=0)
+    img_shapes = torch.as_tensor(img_shapes, dtype=torch.long)
+    pixel_counts = torch.as_tensor(pixel_counts, dtype=torch.long)
+    batch = PixelBatch(
+        img_bases=fnames,
+        imgs=imgs,
+        img_shapes=img_shapes,
+        pixel_counts=pixel_counts,
+        indices=labels
+    )
+    batches.append(batch)
+    print("total ", len(batches), "batch data loaded")
+
+    return batches
 
 
-def extract_data(archive: ZipFile, dir_name: str) -> Data:
-    """Extract all data need for a dataset from zip archive
+def len2idx(lens) -> np.ndarray:
+    end_indices = np.cumsum(lens)
+    start_indices = np.concatenate([[0], end_indices[:-1]], axis=0)
+    indices = np.stack([start_indices, end_indices], axis=1)
 
-    Args:
-        archive (ZipFile):
-        dir_name (str): dir name in archive zip (eg: train, test_2014......)
+    return indices
 
-    Returns:
-        Data: list of tuple of image and formula
-    """
-    with archive.open(f"{dir_name}/caption.txt", "r") as f:
+
+def build_sparse_dataset(processed_data_path, folder: str, batch_size: int) -> List[PixelBatch]:
+    dir_name = os.path.join(processed_data_path, folder)
+    with open(os.path.join(dir_name, "caption.txt"), "r") as f:
         captions = f.readlines()
+
+    feat = np.load(os.path.join(dir_name, f"{folder}.npz"))
+    sparse_pixels = feat["sparse_pixels"].astype(np.float32)
+    pixel_counts = feat["pixel_counts"].astype(np.int64)
+    image_shapes = feat["image_shapes"].astype(np.int64)
+    pixel_indices = len2idx(pixel_counts)
+
     data = []
-    for line in captions:
-        tmp = line.decode().strip().split()
+    for i, line in enumerate(captions):
+        tmp = line.strip().split()
         img_name = tmp[0]
         formula = tmp[1:]
-        with archive.open(f"{dir_name}/{img_name}.bmp", "r") as f:
-            # move image to memory immediately, avoid lazy loading, which will lead to None pointer error in loading
-            img = Image.open(f).copy()
-        data.append((img_name, img, formula))
+
+        start, end = pixel_indices[i]
+        img = sparse_pixels[start:end].copy()
+        pixel_count = pixel_counts[i]
+        img_shape = image_shapes[i]
+
+        data.append((img_name, img, img_shape, pixel_count, formula))
 
     print(f"Extract data from: {dir_name}, with data size: {len(data)}")
 
-    return data
-
-
-@dataclass
-class Batch:
-    img_bases: List[str]  # [b,]
-    imgs: FloatTensor  # [b, 1, H, W]
-    mask: LongTensor  # [b, H, W]
-    indices: List[List[int]]  # [b, l]
-
-    def __len__(self) -> int:
-        return len(self.img_bases)
-
-    def to(self, device) -> "Batch":
-        return Batch(
-            img_bases=self.img_bases,
-            imgs=self.imgs.to(device),
-            mask=self.mask.to(device),
-            indices=self.indices,
-        )
-
-
-def collate_fn(batch):
-    assert len(batch) == 1
-    batch = batch[0]
-    fnames = batch[0]
-    images_x = batch[1]
-    seqs_y = [vocab.words2indices(x) for x in batch[2]]
-
-    heights_x = [s.size(1) for s in images_x]
-    widths_x = [s.size(2) for s in images_x]
-
-    n_samples = len(heights_x)
-    max_height_x = max(heights_x)
-    max_width_x = max(widths_x)
-
-    x = torch.zeros(n_samples, 1, max_height_x, max_width_x)
-    x_mask = torch.ones(n_samples, max_height_x, max_width_x, dtype=torch.bool)
-    for idx, s_x in enumerate(images_x):
-        x[idx, :, : heights_x[idx], : widths_x[idx]] = s_x
-        x_mask[idx, : heights_x[idx], : widths_x[idx]] = 0
-
-    # return fnames, x, x_mask, seqs_y
-    return Batch(fnames, x, x_mask, seqs_y)
-
-
-def build_dataset(archive, folder: str, batch_size: int):
-    data = extract_data(archive, folder)
-    return data_iterator(data, batch_size)
+    return sparse_data_iterator(data, batch_size)
 
 
 class CROHMEDatamodule(pl.LightningDataModule):
     def __init__(
         self,
-        zipfile_path: str = f"{os.path.dirname(os.path.realpath(__file__))}/../../data.zip",
+        processed_data_path: str = f"{os.path.dirname(os.path.realpath(__file__))}/../../processed",
         test_year: str = "2014",
         batch_size: int = 8,
         num_workers: int = 5,
     ) -> None:
         super().__init__()
         assert isinstance(test_year, str)
-        self.zipfile_path = zipfile_path
+        self.processed_data_path = processed_data_path
         self.test_year = test_year
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-        print(f"Load data from: {self.zipfile_path}")
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+
+        print(f"Load data from: {self.processed_data_path}")
 
     def setup(self, stage: Optional[str] = None) -> None:
-        with ZipFile(self.zipfile_path) as archive:
-            if stage == "fit" or stage is None:
-                self.train_dataset = build_dataset(archive, "train", self.batch_size)
-                self.val_dataset = build_dataset(archive, self.test_year, 1)
-            if stage == "test" or stage is None:
-                self.test_dataset = build_dataset(archive, self.test_year, 1)
+        if stage == "fit" or stage is None:
+            self.train_dataset = build_sparse_dataset(self.processed_data_path, "train", self.batch_size)
+            self.val_dataset = build_sparse_dataset(self.processed_data_path, self.test_year, 1)
+        if stage == "test" or stage is None:
+            self.test_dataset = build_sparse_dataset(self.processed_data_path, self.test_year, 1)
 
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
             shuffle=True,
             num_workers=self.num_workers,
-            collate_fn=collate_fn,
+            collate_fn=lambda _batch: _batch[0]
         )
 
     def val_dataloader(self):
@@ -190,7 +195,7 @@ class CROHMEDatamodule(pl.LightningDataModule):
             self.val_dataset,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=collate_fn,
+            collate_fn=lambda _batch: _batch[0]
         )
 
     def test_dataloader(self):
@@ -198,7 +203,7 @@ class CROHMEDatamodule(pl.LightningDataModule):
             self.test_dataset,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=collate_fn,
+            collate_fn=lambda _batch: _batch[0]
         )
 
 

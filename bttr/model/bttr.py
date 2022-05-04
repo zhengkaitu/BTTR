@@ -7,16 +7,18 @@ from torch import FloatTensor, LongTensor
 from bttr.utils import Hypothesis
 
 from .decoder import Decoder
-from .encoder import Encoder
+# from .encoder import Encoder
+from .encoder_spt import Encoder
 
 
 class BTTR(pl.LightningModule):
     def __init__(
         self,
         d_model: int,
-        growth_rate: int,
-        num_layers: int,
-        num_attn_layers: int,
+        kernel_size: int,
+        enc_attn_layers: int,
+        enc_attn_heads: int,
+        enc_mlp_ratio: int,
         nhead: int,
         num_decoder_layers: int,
         dim_feedforward: int,
@@ -25,7 +27,11 @@ class BTTR(pl.LightningModule):
         super().__init__()
 
         self.encoder = Encoder(
-            d_model=d_model, growth_rate=growth_rate, num_layers=num_layers, num_attn_layers=num_attn_layers
+            d_model=d_model,
+            kernel_size=kernel_size,
+            enc_attn_layers=enc_attn_layers,
+            enc_attn_heads=enc_attn_heads,
+            enc_mlp_ratio=enc_mlp_ratio
         )
         self.decoder = Decoder(
             d_model=d_model,
@@ -36,16 +42,12 @@ class BTTR(pl.LightningModule):
         )
 
     def forward(
-        self, img: FloatTensor, img_mask: LongTensor, tgt: LongTensor
+        self, imgs: FloatTensor, img_shapes: LongTensor, pixel_counts: LongTensor, tgt: LongTensor
     ) -> FloatTensor:
         """run img and bi-tgt
 
         Parameters
         ----------
-        img : FloatTensor
-            [b, 1, h, w]
-        img_mask: LongTensor
-            [b, h, w]
         tgt : LongTensor
             [2b, l]
 
@@ -54,8 +56,8 @@ class BTTR(pl.LightningModule):
         FloatTensor
             [2b, l, vocab_size]
         """
-        feature, mask = self.encoder(img, img_mask)  # [b, t, d]
-        feature = torch.cat((feature, feature), dim=0)  # [2b, t, d]
+        feature, mask = self.encoder(imgs, img_shapes, pixel_counts)          # [b, t, d]
+        feature = torch.cat((feature, feature), dim=0)                      # [2b, t, d]
         mask = torch.cat((mask, mask), dim=0)
 
         out = self.decoder(feature, mask, tgt)
@@ -63,22 +65,13 @@ class BTTR(pl.LightningModule):
         return out
 
     def beam_search(
-        self, img: FloatTensor, img_mask: LongTensor, beam_size: int, max_len: int
+        self, imgs: FloatTensor, img_shapes: LongTensor, pixel_counts: LongTensor, beam_size: int, max_len: int
     ) -> List[Hypothesis]:
         """run bi-direction beam search for given img
-
-        Parameters
-        ----------
-        img : FloatTensor
-            [1, 1, h', w']
-        img_mask: LongTensor
-            [1, h', w']
-        beam_size : int
-        max_len : int
 
         Returns
         -------
         List[Hypothesis]
         """
-        feature, mask = self.encoder(img, img_mask)  # [1, t, d]
+        feature, mask = self.encoder(imgs, img_shapes, pixel_counts)          # [1, t, d]
         return self.decoder.beam_search(feature, mask, beam_size, max_len)
